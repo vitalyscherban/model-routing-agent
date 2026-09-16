@@ -162,6 +162,48 @@ exists as a lever in `config.py` rather than being left untestable.
 
 ---
 
+## Azure production deployment
+
+The same three-stage pipeline (cache → classify → escalate) runs on Azure
+with no architectural changes to the routing logic — only the cache backend
+and model endpoints are swapped for managed Azure services.
+
+```mermaid
+graph LR
+    subgraph in["Ingress"]
+        APIM["Azure API Management\nauth · rate-limit"]
+    end
+    subgraph agent["Azure Container Apps"]
+        R["Routing Agent\nclassifier + orchestrator"]
+    end
+    subgraph cache["Cache"]
+        REDIS["Azure Cache for Redis"]
+    end
+    subgraph aoai["Azure OpenAI Service"]
+        T1["gpt-4o-mini\ncheap tier"]
+        T2["gpt-4o std\nmid tier"]
+        T3["gpt-4o / o1-mini\nstrong tier"]
+    end
+    subgraph obs["Observability"]
+        AI["Application Insights\ntoken cost · tier split"]
+    end
+
+    APIM --> R
+    R <--> REDIS
+    R --> T1 & T2 & T3
+    R --> AI
+
+    style T1 fill:#d4edda,stroke:#3c763d
+    style T2 fill:#fff3cd,stroke:#8a6d3b
+    style T3 fill:#f8d7da,stroke:#a94442
+    style REDIS fill:#d4edda,stroke:#3c763d
+```
+
+Full architecture detail, security design, multi-region topology, and
+retuning guidance: [docs/azure-architecture.md](docs/azure-architecture.md).
+
+---
+
 ## Measured results
 
 Reproduce with `python benchmarks/compare.py`.
@@ -226,6 +268,24 @@ is the floor-of-the-ladder failure mode diagrammed above: escalating from the
 bottom of a misjudged ladder costs the retry *and* still doesn't always reach
 a tier that can solve the task within the default one-rung cap.
 
+### Cost savings at production scale
+
+The per-task saving (67.2%) projects linearly to production volumes. Numbers
+below use the benchmark's measured cost-per-task ($0.001020 naive vs.
+$0.000335 routed) applied to pay-as-you-go Azure OpenAI pricing.
+
+| Monthly tasks | Naive cost | Routed cost | Monthly saving | Annual saving |
+|---|---:|---:|---:|---:|
+| 100K | $102 | $33.50 | $68.50 | $822 |
+| 1M | $1,020 | $335 | $685 | $8,220 |
+| 10M | $10,200 | $3,350 | $6,850 | $82,200 |
+| 50M | $51,000 | $16,750 | $34,250 | $411,000 |
+
+The Azure infrastructure overhead (Redis, Container Apps, APIM, monitoring)
+adds approximately $110–165/month — fixed cost that disappears into noise
+above ~250K tasks/month. See [docs/azure-architecture.md](docs/azure-architecture.md)
+for the full breakdown.
+
 ---
 
 ## A bug found in the corpus itself
@@ -280,7 +340,8 @@ just a mocked cost figure.
 | `benchmarks/` | `compare.py`, `ablation.py` — both run in CI |
 
 Further reading: [architecture](docs/architecture.md) ·
-[tuning](docs/tuning.md) · [evaluation](docs/evaluation.md).
+[tuning](docs/tuning.md) · [evaluation](docs/evaluation.md) ·
+[Azure solution architecture](docs/azure-architecture.md).
 
 ## License
 
